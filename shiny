@@ -1,0 +1,85 @@
+#Title: Headers (rownames/ columnnames) wrongly printed in Excel when RpivotTable data is exported
+
+# rPivotTable allows you to incorporate some custom javascript functions. In this case, we capture the HTML table that it displays anytime a change is made to the rPivotTable object
+# We 'scrape' the HTML table using the rvest library and convert it into a reactive. Specifically we use an eventReactive that triggers anytime the rPivotTable object changes
+# We use shiny's download handler to download the pivoted table
+
+library(rpivotTable)
+# consider using tidyverse library call to get dplyr, readr and rvest
+# library(tidyverse)
+library(dplyr)
+library(readr)
+# need rvest to be able to 'scrape' rPivotTable
+library(rvest)
+library(shiny)
+# library(openxlsx)
+# I really like how lightweight and versatile writexl is
+library(writexl)
+# need JS functionality in htmlwidgets
+library(htmlwidgets)
+library(shinyjs)
+
+#ui
+ui = fluidPage(
+  # for the purposes of this exercise, I'm only including csv and xlsx to simplify the download logic
+  # but you could certainly add more format options
+  radioButtons(inputId = "format", label = "Enter the format to download", 
+               choices = c( "csv", "excel"), inline = TRUE, selected = "csv"),
+  downloadButton(outputId = "download_pivot"),
+  fluidRow(rpivotTableOutput("pivot")))
+
+#server
+server = function (input, output) { 
+  
+  output$pivot <- renderRpivotTable(
+    rpivotTable(mtcars, rows = c("vs", "cyl", "hp"), cols = c("carb", "am", "gear"), vals =  "mpg", aggregatorName = "Sum",
+                rendererName = "Table", width="50%", height="550px",
+                onRefresh = htmlwidgets::JS(
+                  "function(config) {
+                  Shiny.onInputChange('pivot', document.getElementById('pivot').innerHTML); 
+}"))
+    )
+  
+  # create an eventReactive dataframe that regenerates anytime the pivot object changes
+  # wrapped in a tryCatch to only return table object. errors out when charts are shown
+  pivot_tbl <- eventReactive(input$pivot, {
+    tryCatch({
+      input$pivot %>%
+        read_html %>%
+        html_table(fill = TRUE) %>%
+        .[[2]]
+    }, error = function(e) {
+      return()
+    })
+  })
+  
+  # allow the user to download once the pivot_tbl object is available
+  observe({
+    if (is.data.frame(pivot_tbl()) && nrow(pivot_tbl()) > 0) {
+      shinyjs::enable("download_summary")
+    } else {
+      shinyjs::disable("download_summary")
+    }
+  })
+  
+  # using shiny's download handler to get the data output
+  output$download_pivot <- downloadHandler(
+    filename = function() {
+      if (input$format == "csv") {
+        "pivot.csv"
+      } else if (input$format == "excel") {
+        "pivot.xlsx"
+      }
+    },
+    content = function(file) {
+      if (input$format == "csv") {
+        write_csv(pivot_tbl(), path = file,  na ="", append =FALSE, col_names = TRUE)
+      } else if (input$format == "excel") {
+        writexl::write_xlsx(pivot_tbl(), path = file)
+      }
+    }
+  )
+  
+  }
+
+shinyApp(ui = ui, server = server)
